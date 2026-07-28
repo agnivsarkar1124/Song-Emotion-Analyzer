@@ -1,0 +1,7 @@
+streamlit
+requests
+beautifulsoup4
+vaderSentiment
+scikit-learn
+nrclex==3.0.0
+nltk
