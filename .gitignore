@@ -1,0 +1,6 @@
+venv/
+__pycache__/
+*.pyc
+.env
+user_library.json
+lyrics_cache.json
