@@ -1,5 +1,5 @@
 """
-Song Mood Explorer — a standalone interactive dashboard.
+Song Mood Explorer - a standalone interactive dashboard.
 
 Enter a song + artist, and it fetches the lyrics, scores mood/variance
 (VADER), profiles discrete emotions (NRCLex), and classifies it into a
@@ -56,7 +56,7 @@ def fetch_with_retry(url, headers=None, params=None, retries=3, delay=2):
     """
     Wraps requests.get with retries. Without this, a transient network
     hiccup (connection reset, brief timeout) fails outright instead of
-    recovering — which showed up as songs silently coming back with
+    recovering - which showed up as songs silently coming back with
     empty lyrics rather than a clear network error.
     """
     last_error = None
@@ -77,18 +77,24 @@ def get_lyrics(song_title, artist, token):
     }
     params = {"q": f"{song_title} {artist}"}
     response = fetch_with_retry("https://api.genius.com/search", headers=headers, params=params)
+    print(f"[DEBUG] Search status: {response.status_code}")
     data = response.json()
 
     hits = data.get("response", {}).get("hits", [])
+    print(f"[DEBUG] Hits found: {len(hits)}")
     if not hits:
         raise ValueError(f"No Genius results found for '{song_title}' by '{artist}'")
 
     result = hits[0]["result"]
     song_url = result["url"]
+    print(f"[DEBUG] Matched URL: {song_url}")
 
     page = fetch_with_retry(song_url, headers={"User-Agent": headers["User-Agent"]})
+    print(f"[DEBUG] Page fetch status: {page.status_code}, length: {len(page.text)}")
+
     soup = BeautifulSoup(page.text, "html.parser")
     containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
+    print(f"[DEBUG] Lyrics containers found: {len(containers)}")
 
     lyrics_parts = []
     for container in containers:
@@ -98,7 +104,7 @@ def get_lyrics(song_title, artist, token):
 
     lyrics = "\n".join(lyrics_parts)
     if not lyrics.strip():
-        raise ValueError(f"Lyrics came back empty for '{song_title}' by '{artist}' — check the title/artist spelling")
+        raise ValueError(f"Lyrics came back empty for '{song_title}' by '{artist}' - check the title/artist spelling")
     return lyrics
 
 
@@ -169,7 +175,7 @@ st.set_page_config(page_title="Song Mood Explorer", page_icon="🎵", layout="ce
 st.title("🎵 Song Mood Explorer")
 st.caption(
     "Enter a song and artist to see its mood, emotional profile, and predicted "
-    "category — built on VADER sentiment, NRC emotion lexicon, and TF-IDF "
+    "category - built on VADER sentiment, NRC emotion lexicon, and TF-IDF "
     "similarity against a small reference set."
 )
 
@@ -230,7 +236,7 @@ if st.button("Analyze", type="primary", use_container_width=True):
         elif NRCLEX_AVAILABLE:
             st.info("NRCLex ran but returned no scores for this song (short or ambiguous lyrics).")
         else:
-            st.info("NRCLex isn't installed — run `pip install nrclex` to enable emotion profiling.")
+            st.info("NRCLex isn't installed - run `pip install nrclex` to enable emotion profiling.")
 
         with st.expander("View raw lyrics"):
             st.text(lyrics)
