@@ -77,24 +77,24 @@ def get_lyrics(song_title, artist, token):
     }
     params = {"q": f"{song_title} {artist}"}
     response = fetch_with_retry("https://api.genius.com/search", headers=headers, params=params)
-    print(f"[DEBUG] Search status: {response.status_code}")
+    st.write(f"DEBUG - Search status: {response.status_code}")
     data = response.json()
 
     hits = data.get("response", {}).get("hits", [])
-    print(f"[DEBUG] Hits found: {len(hits)}")
+    st.write(f"DEBUG - Hits found: {len(hits)}")
     if not hits:
         raise ValueError(f"No Genius results found for '{song_title}' by '{artist}'")
 
     result = hits[0]["result"]
     song_url = result["url"]
-    print(f"[DEBUG] Matched URL: {song_url}")
+    st.write(f"DEBUG - Matched URL: {song_url}")
 
     page = fetch_with_retry(song_url, headers={"User-Agent": headers["User-Agent"]})
-    print(f"[DEBUG] Page fetch status: {page.status_code}, length: {len(page.text)}")
+    st.write(f"DEBUG - Page fetch status: {page.status_code}, length: {len(page.text)}")
 
     soup = BeautifulSoup(page.text, "html.parser")
     containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
-    print(f"[DEBUG] Lyrics containers found: {len(containers)}")
+    st.write(f"DEBUG - Lyrics containers found: {len(containers)}")
 
     lyrics_parts = []
     for container in containers:
@@ -173,6 +173,7 @@ def category_similarity_scores(lyrics, reference_docs):
 st.set_page_config(page_title="Song Mood Explorer", page_icon="🎵", layout="centered")
 
 st.title("🎵 Song Mood Explorer")
+st.caption("DEBUG BUILD MARKER: v4 - if you don't see this exact line, the deploy is stale")
 st.caption(
     "Enter a song and artist to see its mood, emotional profile, and predicted "
     "category - built on VADER sentiment, NRC emotion lexicon, and TF-IDF "
