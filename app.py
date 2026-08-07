@@ -197,6 +197,85 @@ if not token:
     st.info("Enter a Genius API token in the sidebar to get started.")
     st.stop()
 
+with st.expander("🔧 Diagnostic: test header strategies against the 403 block"):
+    if st.button("Run full diagnostic"):
+        test_songs = [
+            ("Team", "Lorde"),
+            ("Bad Habits", "Ed Sheeran"),
+            ("Blinding Lights", "The Weeknd"),
+        ]
+
+        header_variants = {
+            "Original (basic UA only)": {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
+            },
+            "Full browser UA": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            },
+            "UA + Referer + Accept headers": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://genius.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+            },
+            "Full browser-like set": {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                "Referer": "https://genius.com/",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
+                "Accept-Encoding": "gzip, deflate, br",
+                "Connection": "keep-alive",
+                "Upgrade-Insecure-Requests": "1",
+                "Sec-Fetch-Dest": "document",
+                "Sec-Fetch-Mode": "navigate",
+                "Sec-Fetch-Site": "same-origin",
+            },
+        }
+
+        search_headers = {"Authorization": f"Bearer {token}"}
+        results = []
+
+        for song_title, artist in test_songs:
+            params = {"q": f"{song_title} {artist}"}
+            try:
+                search_resp = requests.get("https://api.genius.com/search", headers=search_headers, params=params, timeout=10)
+                hits = search_resp.json().get("response", {}).get("hits", [])
+                if not hits:
+                    results.append({"Song": f"{song_title} - {artist}", "Header set": "N/A", "Status": "no search hits", "Containers": "-"})
+                    continue
+                song_url = hits[0]["result"]["url"]
+            except Exception as e:
+                results.append({"Song": f"{song_title} - {artist}", "Header set": "N/A", "Status": f"search error: {e}", "Containers": "-"})
+                continue
+
+            for variant_name, variant_headers in header_variants.items():
+                try:
+                    page = requests.get(song_url, headers=variant_headers, timeout=10)
+                    soup = BeautifulSoup(page.text, "html.parser")
+                    containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
+                    results.append({
+                        "Song": f"{song_title} - {artist}",
+                        "Header set": variant_name,
+                        "Status": page.status_code,
+                        "Containers": len(containers),
+                    })
+                except Exception as e:
+                    results.append({
+                        "Song": f"{song_title} - {artist}",
+                        "Header set": variant_name,
+                        "Status": f"error: {e}",
+                        "Containers": "-",
+                    })
+                time.sleep(1)
+
+        st.dataframe(results, use_container_width=True)
+
+        working = [r for r in results if isinstance(r["Status"], int) and r["Status"] == 200 and r["Containers"] not in ("-", 0)]
+        if working:
+            st.success(f"Found {len(working)} working combination(s) - see table above for which header set to use.")
+        else:
+            st.error("No header combination returned a working page across any test song. This confirms an IP-level block on Streamlit Cloud, not a header issue.")
+
 with st.spinner("Loading reference dataset (first run only, ~15 songs)..."):
     reference_docs = build_reference_docs(token)
 
