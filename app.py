@@ -52,13 +52,31 @@ SEED_SONGS["Intense"] = [("Believer", "Imagine Dragons"), ("Radioactive", "Imagi
 
 # --- Core pipeline (ported from the main project) ----------------------------
 
+def fetch_with_retry(url, headers=None, params=None, retries=3, delay=2):
+    """
+    Wraps requests.get with retries. Without this, a transient network
+    hiccup (connection reset, brief timeout) fails outright instead of
+    recovering — which showed up as songs silently coming back with
+    empty lyrics rather than a clear network error.
+    """
+    last_error = None
+    for attempt in range(retries):
+        try:
+            return requests.get(url, headers=headers, params=params, timeout=10)
+        except requests.exceptions.RequestException as e:
+            last_error = e
+            if attempt < retries - 1:
+                time.sleep(delay)
+    raise last_error
+
+
 def get_lyrics(song_title, artist, token):
     headers = {
         "Authorization": f"Bearer {token}",
         "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)",
     }
     params = {"q": f"{song_title} {artist}"}
-    response = requests.get("https://api.genius.com/search", headers=headers, params=params, timeout=10)
+    response = fetch_with_retry("https://api.genius.com/search", headers=headers, params=params)
     data = response.json()
 
     hits = data.get("response", {}).get("hits", [])
@@ -68,7 +86,7 @@ def get_lyrics(song_title, artist, token):
     result = hits[0]["result"]
     song_url = result["url"]
 
-    page = requests.get(song_url, headers={"User-Agent": headers["User-Agent"]}, timeout=10)
+    page = fetch_with_retry(song_url, headers={"User-Agent": headers["User-Agent"]})
     soup = BeautifulSoup(page.text, "html.parser")
     containers = soup.find_all("div", attrs={"data-lyrics-container": "true"})
 
