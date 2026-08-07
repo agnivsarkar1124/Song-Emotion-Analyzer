@@ -17,7 +17,7 @@ Enter a song and artist, and it fetches the lyrics, scores mood and emotional vo
 
 ## Try it
 
-**[Live demo →](#)** *(add your deployed Streamlit link here)*
+**[Live demo →](#)** *https://song-emotion-analyzer-jeegiufquhyxfhhjgctgw4.streamlit.app/*
 
 Or run locally:
 ```bash
