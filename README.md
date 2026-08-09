@@ -17,9 +17,7 @@ Enter a song and artist, and it fetches the lyrics, scores mood and emotional vo
 
 ## Try it
 
-**[Live demo →](#)** *https://song-emotion-analyzer-jeegiufquhyxfhhjgctgw4.streamlit.app/*
-
-Or run locally:
+Run locally:
 ```bash
 pip install -r requirements.txt
 streamlit run app.py
