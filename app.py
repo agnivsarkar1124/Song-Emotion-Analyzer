@@ -214,12 +214,11 @@ def recommend_songs(library, category, k, reference_docs, cosine_weight=0.6):
     distance_weight = 1 - cosine_weight
     ref_text = reference_docs.get(category, "")
 
-    scored = []
-    for song in library:
+    def score_song(song):
         dist_sim = distance_similarity(song["mood"], song["variance"], category)
         sem_sim = tfidf_similarity(song["lyrics"], ref_text)
         combined = cosine_weight * sem_sim + distance_weight * dist_sim
-        scored.append({
+        return {
             "title": song["title"],
             "artist": song["artist"],
             "category": song["category"],
@@ -227,9 +226,31 @@ def recommend_songs(library, category, k, reference_docs, cosine_weight=0.6):
             "variance": song["variance"],
             "match_score": round(combined, 3),
             "lyrics": song["lyrics"],  # carried through as grounding context for the RAG explanation step
-        })
+            "is_exact_category": song["category"] == category,
+        }
 
-    return sorted(scored, key=lambda x: x["match_score"], reverse=True)[:k]
+    scored = [score_song(song) for song in library]
+
+    # Only recommend songs actually classified into the requested category -
+    # ranking the whole library by raw similarity score (the old behavior)
+    # could surface a song labeled "Sad" under a "Happy" search just because
+    # its content score was high, which reads as a flat-out wrong result.
+    exact_matches = sorted(
+        [s for s in scored if s["is_exact_category"]],
+        key=lambda x: x["match_score"], reverse=True
+    )
+
+    if len(exact_matches) >= k:
+        return exact_matches[:k]
+
+    # Not enough real matches in this category - fill the remainder with the
+    # closest alternatives, but keep them clearly distinguishable so the UI
+    # can label them honestly instead of silently mixing categories.
+    fallback = sorted(
+        [s for s in scored if not s["is_exact_category"]],
+        key=lambda x: x["match_score"], reverse=True
+    )
+    return exact_matches + fallback[:k - len(exact_matches)]
 
 
 # --- RAG: generate a grounded explanation for the retrieved recommendations ---
@@ -407,13 +428,20 @@ if st.session_state.library:
         st.session_state.last_recommendations = recommendations
         st.session_state.last_category = target_category
 
+        exact_count = sum(1 for r in recommendations if r["is_exact_category"])
         st.markdown(f"**Top {len(recommendations)} songs for '{target_category}':**")
+        if exact_count < len(recommendations):
+            st.caption(
+                f"Only {exact_count} song(s) in your library are actually classified as '{target_category}'. "
+                f"The rest below are the closest alternatives from other categories, marked accordingly."
+            )
         st.dataframe(
             [
                 {
                     "Title": r["title"],
                     "Artist": r["artist"],
                     "Predicted category": r["category"],
+                    "Match type": "Exact" if r["is_exact_category"] else "Closest alternative",
                     "Match score": r["match_score"],
                 }
                 for r in recommendations
