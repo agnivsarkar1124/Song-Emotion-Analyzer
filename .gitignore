@@ -5,3 +5,5 @@ __pycache__/
 user_library.json
 lyrics_cache.json
 .pytest_cache/
+taste_profile.json
+.DS_Store

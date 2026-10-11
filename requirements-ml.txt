@@ -1,0 +1,17 @@
+# Optional: enables the Keras "Wide & Deep" neural taste model (neural_ranker.py).
+# The app works without it, using the linear taste model only.
+#   pip install -r requirements-ml.txt
+# Each line only installs on machines it supports, so this file is safe everywhere.
+
+# Apple Silicon Macs, Linux and Windows on Python 3.10-3.13 -> TensorFlow (ships Keras 3)
+tensorflow>=2.18; python_version >= "3.10" and python_version < "3.14" and (sys_platform != "darwin" or platform_machine == "arm64")
+
+# Intel Macs: TensorFlow's last Intel-Mac release is 2.16.2, for Python 3.9-3.12
+tensorflow==2.16.2; sys_platform == "darwin" and platform_machine == "x86_64" and python_version < "3.13"
+
+# Python 3.14+ (no TensorFlow wheels yet): Keras 3 on the JAX backend instead
+keras>=3.0; python_version >= "3.14" and (sys_platform != "darwin" or platform_machine != "x86_64")
+jax[cpu]; python_version >= "3.14" and (sys_platform != "darwin" or platform_machine != "x86_64")
+
+# Intel Mac on Python 3.13+: no TensorFlow or JAX wheels exist, so nothing installs here.
+# Use a Python 3.12 virtual environment if you want the neural model on that machine.

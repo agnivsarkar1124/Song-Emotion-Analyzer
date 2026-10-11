@@ -41,6 +41,7 @@ import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
 from emotion_engine import EMOTIONS, analyze_lyrics, load_lexicon
+from themes import theme_scores
 
 SCHEMA_VERSION = 1
 DEFAULT_WEIGHTS = {"emotion": 0.35, "mood": 0.40, "theme": 0.25}
@@ -326,6 +327,23 @@ def parse_mood_description(text: str) -> MoodQuery:
 
 # --- Index + search ------------------------------------------------------------------
 
+def song_key(title: str, artist: str) -> str:
+    """Stable identifier for a song across sessions (case-insensitive title|artist)."""
+    return f"{title.strip().lower()}|{artist.strip().lower()}"
+
+
+@dataclass
+class ScoredQuery:
+    query: MoodQuery
+    weights: dict             # active channel weights, sum to 1
+    similarity: np.ndarray    # combined similarity per song, in [0, 1]
+    s_emotion: np.ndarray
+    s_mood: np.ndarray
+    s_theme: np.ndarray
+    used_kw: dict             # query keywords found in the lyric vocabulary -> column
+    order: list               # song indices, most similar first
+
+
 def _describe_axes(valence: float, intensity: float) -> str:
     tone = "bright" if valence > 0.35 else "dark" if valence < -0.35 else "bittersweet" if valence < -0.1 else "neutral-toned"
     energy = "volatile" if intensity > 0.5 else "calm" if intensity < -0.5 else "steady"
@@ -354,8 +372,10 @@ class MoodIndex:
             analysis = song.get("emotion_analysis") or analyze_lyrics(song["lyrics"], valence)
             profile = np.array([analysis["profile"].get(e, 0.0) for e in EMOTIONS], dtype=float)
             self.songs.append({
-                "src": song, "valence": valence, "intensity": intensity,
+                "src": song, "key": song_key(song["title"], song["artist"]),
+                "valence": valence, "intensity": intensity,
                 "analysis": analysis, "profile": profile,
+                "themes": song.get("themes") or theme_scores(song["lyrics"]),
             })
 
         self.vectorizer = None
@@ -390,20 +410,18 @@ class MoodIndex:
         norm = np.linalg.norm(vec)
         return (vec / norm if norm > 0 else None), used
 
-    def search(self, description: str, k: int = 5, weights: dict | None = None):
-        """Return ``(playlist, hits)``: the JSON-serialisable playlist dict and, for the RAG
-        explanation step, the retrieved songs including their lyrics."""
+    def score_all(self, description: str, weights: dict | None = None) -> "ScoredQuery":
+        """Similarity of *every* song to the description. ``search`` takes the top K of this;
+        personalisation re-ranks the full list."""
         query = parse_mood_description(description)
         n = len(self.songs)
         if n == 0:
             raise ValueError("The song database is empty - add songs or enable the seed songs first.")
-        k = max(1, min(int(k), n))
 
         base = dict(DEFAULT_WEIGHTS)
         if weights:
             base.update(weights)
 
-        # --- similarities -------------------------------------------------------------
         q_emo = np.array([query.emotions[e] for e in EMOTIONS])
         s_emotion = np.array([_cosine(q_emo, s["profile"]) for s in self.songs])
 
@@ -416,7 +434,7 @@ class MoodIndex:
             raw = np.asarray(self.matrix @ q_vec).ravel()
             s_theme = np.tanh(raw / THEME_SATURATION)
         else:
-            raw = s_theme = np.zeros(n)
+            s_theme = np.zeros(n)
 
         active = {
             "emotion": base["emotion"] if q_emo.any() else 0.0,
@@ -430,57 +448,67 @@ class MoodIndex:
         active = {name: w / total for name, w in active.items()}
 
         similarity = (active["emotion"] * s_emotion + active["mood"] * s_mood + active["theme"] * s_theme)
-        distance = 1.0 - similarity
+        order = sorted(range(n), key=lambda j: (-similarity[j], self.songs[j]["src"]["title"].lower()))
+        return ScoredQuery(query=query, weights=active, similarity=similarity, s_emotion=s_emotion,
+                           s_mood=s_mood, s_theme=s_theme, used_kw=used_kw, order=order)
 
-        order = sorted(range(n), key=lambda j: (distance[j], self.songs[j]["src"]["title"].lower()))[:k]
+    def track(self, sq: "ScoredQuery", j: int, rank: int) -> dict:
+        """JSON-ready description of song ``j`` for a scored query (no lyrics)."""
+        song = self.songs[j]
+        src = song["src"]
+        reason = self._explain(sq.query, song, j, sq.used_kw, sq.s_emotion[j])
+        top_emotion = song["analysis"].get("top_emotion") or src.get("top_emotion")
+        similarity = float(sq.similarity[j])
+        return {
+            "rank": rank,
+            "key": song["key"],
+            "title": src["title"],
+            "artist": src["artist"],
+            "distance": round(1.0 - similarity, 4),
+            "match_percent": int(round(100 * similarity)),
+            "scores": {
+                "emotion": round(float(sq.s_emotion[j]), 4),
+                "mood": round(float(sq.s_mood[j]), 4),
+                "theme": round(float(sq.s_theme[j]), 4),
+            },
+            "category": src.get("category"),
+            "top_emotion": top_emotion if top_emotion not in (None, "-") else None,
+            "secondary_emotion": song["analysis"].get("secondary_emotion"),
+            "emotion_confidence": song["analysis"].get("confidence"),
+            "emotion_profile": {e: round(float(song["profile"][x]), 4) for x, e in enumerate(EMOTIONS)},
+            "themes": song["themes"],
+            "valence": round(float(song["valence"]), 3),
+            "intensity": round(float(song["intensity"]), 3),
+            "mood": src["mood"],
+            "variance": src["variance"],
+            "duration_seconds": src.get("duration_seconds"),
+            "preview_url": _safe_url(src.get("preview_url")),
+            "track_url": _safe_url(src.get("track_url")),
+            "matched_keywords": reason["keywords"],
+            "why": reason["text"],
+        }
 
-        # --- assemble output ----------------------------------------------------------
-        tracks, hits = [], []
-        for rank, j in enumerate(order, start=1):
-            song = self.songs[j]
-            src = song["src"]
-            reason = self._explain(query, song, j, used_kw, s_emotion[j])
-            top_emotion = song["analysis"].get("top_emotion") or src.get("top_emotion")
-            tracks.append({
-                "rank": rank,
-                "title": src["title"],
-                "artist": src["artist"],
-                "distance": round(float(distance[j]), 4),
-                "match_percent": int(round(100 * float(similarity[j]))),
-                "scores": {
-                    "emotion": round(float(s_emotion[j]), 4),
-                    "mood": round(float(s_mood[j]), 4),
-                    "theme": round(float(s_theme[j]), 4),
-                },
-                "category": src.get("category"),
-                "top_emotion": top_emotion if top_emotion not in (None, "-") else None,
-                "secondary_emotion": song["analysis"].get("secondary_emotion"),
-                "emotion_confidence": song["analysis"].get("confidence"),
-                "emotion_profile": {e: round(float(song["profile"][x]), 4) for x, e in enumerate(EMOTIONS)},
-                "valence": round(float(song["valence"]), 3),
-                "intensity": round(float(song["intensity"]), 3),
-                "mood": src["mood"],
-                "variance": src["variance"],
-                "duration_seconds": src.get("duration_seconds"),
-                "preview_url": _safe_url(src.get("preview_url")),
-                "track_url": _safe_url(src.get("track_url")),
-                "matched_keywords": reason["keywords"],
-                "why": reason["text"],
-            })
-            hits.append({
-                "title": src["title"], "artist": src["artist"], "lyrics": src["lyrics"],
-                "mood": src["mood"], "variance": src["variance"],
-                "match_score": round(float(similarity[j]), 3),
-            })
+    def rag_hit(self, sq: "ScoredQuery", j: int, score: float | None = None) -> dict:
+        """Retrieved song with lyrics, for the grounded-explanation step."""
+        src = self.songs[j]["src"]
+        return {
+            "title": src["title"], "artist": src["artist"], "lyrics": src["lyrics"],
+            "mood": src["mood"], "variance": src["variance"],
+            "match_score": round(float(sq.similarity[j] if score is None else score), 3),
+        }
 
-        mean_profile = np.mean([[t["emotion_profile"][e] for e in EMOTIONS] for t in tracks], axis=0)
-        playlist = {
+    def playlist(self, sq: "ScoredQuery", tracks: list) -> dict:
+        """Wrap a ranked track list in the playlist JSON envelope."""
+        profiles = [[t["emotion_profile"][e] for e in EMOTIONS] for t in tracks] or [[0.0] * len(EMOTIONS)]
+        mean_profile = np.mean(profiles, axis=0)
+        query = sq.query
+        return {
             "schema_version": SCHEMA_VERSION,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "query": query.text,
-            "k": k,
-            "database_size": n,
-            "weights": {name: round(w, 4) for name, w in active.items()},
+            "k": len(tracks),
+            "database_size": len(self.songs),
+            "weights": {name: round(w, 4) for name, w in sq.weights.items()},
             "distance": "1 - (w_emotion*cos(emotions) + w_mood*exp(-d^2/2s^2) + w_theme*tanh(cos(tfidf)/0.12))",
             "parsed_mood": {
                 "valence": query.valence,
@@ -488,20 +516,28 @@ class MoodIndex:
                 "description": _describe_axes(query.valence, query.intensity),
                 "emotions": query.emotions,
                 "concepts": query.concepts,
-                "keywords": sorted(used_kw, key=lambda w: -query.keywords[w])[:12],
+                "keywords": sorted(sq.used_kw, key=lambda w: -query.keywords[w])[:12],
                 "used_fallback": query.used_fallback,
                 "notes": query.notes,
             },
             "summary": {
-                "mean_distance": round(float(np.mean([t["distance"] for t in tracks])), 4),
-                "mean_valence": round(float(np.mean([t["valence"] for t in tracks])), 3),
-                "mean_intensity": round(float(np.mean([t["intensity"] for t in tracks])), 3),
+                "mean_distance": round(float(np.mean([t["distance"] for t in tracks])), 4) if tracks else None,
+                "mean_valence": round(float(np.mean([t["valence"] for t in tracks])), 3) if tracks else 0.0,
+                "mean_intensity": round(float(np.mean([t["intensity"] for t in tracks])), 3) if tracks else 0.0,
                 "emotion_profile": {e: round(float(mean_profile[x]), 4) for x, e in enumerate(EMOTIONS)},
                 "dominant_emotion": EMOTIONS[int(np.argmax(mean_profile))],
             },
             "tracks": tracks,
         }
-        return playlist, hits
+
+    def search(self, description: str, k: int = 5, weights: dict | None = None):
+        """Return ``(playlist, hits)``: the JSON-serialisable top-K playlist and, for the RAG
+        explanation step, the retrieved songs including their lyrics."""
+        sq = self.score_all(description, weights)
+        k = max(1, min(int(k), len(self.songs)))
+        top = sq.order[:k]
+        tracks = [self.track(sq, j, rank) for rank, j in enumerate(top, start=1)]
+        return self.playlist(sq, tracks), [self.rag_hit(sq, j) for j in top]
 
     def _explain(self, query: MoodQuery, song: dict, row: int, used_kw: dict, emo_sim: float) -> dict:
         overlap = {
