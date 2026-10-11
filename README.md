@@ -96,17 +96,36 @@ streamlit run app.py
 
 Then paste your Genius token into the sidebar, add some songs, and try a mood description. Genius blocks scraping from cloud hosting IPs, so lyric fetching only works when you run the app on your own machine.
 
+## Benchmark: does personalisation actually help?
+
+`benchmark.py` measures the feedback loop with **simulated listeners**: hand-written hidden tastes such as "likes sad songs only when they're energetic", plus a random-taste control. For each listener, mood query and seed it:
+
+1. collects feedback through the app's own loop (the listener rates the top card of the Rate deck, the ranking updates, repeat);
+2. after 10 and 25 ratings, ranks every song the listener hasn't rated with four systems, all on the same feedback: mood only (no personalisation), the linear taste model, the linear model with its emotion × energy interaction terms switched off (ablation), and linear + Keras Wide & Deep (if installed);
+3. scores each ranking with **NDCG@5** and **precision@5** against the listener's true relevance (fits the mood × fits their taste).
+
+```bash
+python benchmark.py --token YOUR_GENIUS_TOKEN     # real lyrics for the songs in benchmark_songs.txt
+python benchmark.py --synthetic                   # quick check that it runs (numbers not meaningful)
+```
+
+The first real run fetches ~65 songs' lyrics from Genius and caches them in `benchmark_cache.json` (gitignored, since lyrics are copyrighted), so later runs are offline and fast. It prints a results table, a per-listener breakdown and a headline line, and saves `benchmark_results.json`.
+
+Read the numbers honestly: the listeners' tastes are hand-written over the same kinds of features the model sees, so this tests whether the loop *recovers a known taste*, not whether real people are happier. Quote results as "on simulated listeners". The random-taste control is there on purpose: personalisation can't help it and, with a 45% personalisation weight, actively hurts it, which is a real limitation (a confidence-aware personalisation weight would be the fix).
+
 ## Project structure
 
 | File | Purpose |
 | --- | --- |
-| `app.py` | Streamlit app: tabs (Mood mix, Library, Preset moods), lyric fetching (Genius), per-song scoring, feedback handling, taste-profile sidebar, RAG explanation |
+| `app.py` | Streamlit app: tabs (Mood mix, Library, Preset moods), feedback handling, taste-profile sidebar, preset-category recommender, RAG explanation |
+| `pipeline.py` | Streamlit-free lyric pipeline: Genius fetching, VADER mood/variance, emotion analysis, iTunes lookup, song records |
 | `mood_search.py` | Free-text mood parsing, in-memory index, semantic-distance scoring of every song, JSON playlist |
 | `emotion_engine.py` | Lyric emotion scoring (NRC lexicon with base-rate correction, negation, repeat damping, tone prior) |
 | `themes.py` | 13 interpretable lyrical themes per song |
 | `preferences.py` | Feedback events, taste features, ridge taste model, profile history, personalised re-ranking + comparison |
 | `neural_ranker.py` | Optional Keras Wide & Deep taste network (TensorFlow or JAX backend) + cross-validation |
 | `taste_ui.py` | The interactive two-way component (HTML/CSS/JS) and its view model |
+| `benchmark.py`, `benchmark_songs.txt` | Simulated-listener benchmark (NDCG@5 / precision@5, ablation, control) and its song list |
 | `.streamlit/config.toml` | Dark theme matching the mix |
 | `tests/` | Unit tests using synthetic lyrics and synthetic listeners |
 

@@ -532,6 +532,7 @@ def personalize(index, sq, events: list, k: int, deck_size: int = 12) -> dict:
         "profile": model.summary(),
         "model": model,
         "population": population,
+        "ranking": [base_tracks[j]["key"] for j in personal_order],   # every non-hidden song, best first
     }
 
 
