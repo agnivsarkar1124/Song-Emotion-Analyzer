@@ -2,7 +2,7 @@
 
 An interactive dashboard that classifies songs by emotional category using their **actual lyrics** — not genre tags, not audio features, just the words themselves.
 
-Enter a song and artist, and it fetches the lyrics, scores mood and emotional volatility, profiles discrete emotions, and predicts which of five mood categories the song belongs to — all visualized live.
+Enter a song and artist, and it fetches the lyrics, scores mood and emotional volatility, profiles discrete emotions, and predicts which of five mood categories the song belongs to — all visualized live. You can also **describe a mood in your own words** and get back a ranked JSON playlist, shown in an interactive tabbed view.
 
 ## What it does
 
@@ -30,15 +30,55 @@ This is an interpretable hybrid, **not a neural embedding** (see the PyTorch not
 
 The emotion label itself is also better than before (`emotion_engine.py`). The old `argmax` over raw NRC counts frequently returned the lexicon's `positive` / `negative` polarity tags rather than an emotion, was biased toward whichever emotions tag the most words, counted negated words ("never happy") and counted a chorus every time it repeated. The new scorer drops polarity tags, normalises by each emotion's base rate (square-root-corrected, with smoothing), skips negated words, damps repeated lines, and nudges scores toward emotions that agree with the song's overall tone, then reports a confidence margin. Anger vs. fear vs. sadness is still the hard case for any word-lexicon method — check the confidence value.
 
+### Example playlist JSON
+
+Abridged; every track also carries its emotion profile, tone/swing coordinates, preview and store links, and a short `why`.
+
+```json
+{
+  "schema_version": 1,
+  "query": "chill but slightly nostalgic for a rainy day",
+  "k": 5,
+  "database_size": 18,
+  "weights": { "emotion": 0.35, "mood": 0.4, "theme": 0.25 },
+  "parsed_mood": {
+    "valence": -0.02, "intensity": -0.7, "description": "calm, neutral-toned",
+    "concepts": [{ "term": "chill", "weight": 1.0 }, { "term": "nostalgic", "weight": 0.45 }, { "term": "rainy", "weight": 1.0 }]
+  },
+  "tracks": [
+    {
+      "rank": 1, "title": "…", "artist": "…",
+      "distance": 0.23, "match_percent": 77,
+      "scores": { "emotion": 0.67, "mood": 0.72, "theme": 1.0 },
+      "top_emotion": "anticipation", "why": "Feels calm, neutral-toned; shares sadness & anticipation with your description; lyrics touch on rain, slow, window."
+    }
+  ]
+}
+```
+
 ## Try it
 
-Run locally:
+You need Python 3.9+ and two free keys: a **Genius API token** from [genius.com/api-clients](https://genius.com/api-clients) (required) and, optionally, an **Anthropic API key** from [console.anthropic.com](https://console.anthropic.com) for the "Explain this playlist" button.
+
+Run locally (a virtual environment keeps the dependencies tidy):
 ```bash
+python3 -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
-You'll need a free Genius API token from [genius.com/api-clients](https://genius.com/api-clients).
+Then paste your Genius token into the sidebar, add some songs, and try a mood description. Genius blocks scraping from cloud hosting IPs, so lyric fetching only works when you run the app on your own machine.
+
+## Project structure
+
+| File | Purpose |
+| --- | --- |
+| `app.py` | Streamlit UI, lyric fetching (Genius), per-song scoring, preset-category recommendations, RAG explanation |
+| `mood_search.py` | Free-text mood parsing, in-memory index, top-K semantic-distance search, JSON playlist |
+| `emotion_engine.py` | Lyric emotion scoring (NRC lexicon with base-rate correction, negation, repeat damping, tone prior) |
+| `playlist_ui.py` | Self-contained HTML/CSS/JS tabbed playlist view (Playlist, Mood map, Breakdown, JSON) |
+| `tests/` | Unit tests using synthetic lyrics |
 
 ## The technical story
 
@@ -59,9 +99,11 @@ This project surfaced several real problems worth documenting, not just a featur
 - **Genius API** — lyrics retrieval
 - **BeautifulSoup** — HTML parsing/scraping
 - **VADER Sentiment** — line-level sentiment scoring
-- **NRC Emotion Lexicon (NRCLex)** — discrete emotion profiling
-- **scikit-learn (TF-IDF, cosine similarity)** — content-based category matching
-- **Streamlit** — interactive dashboard UI
+- **NRC Emotion Lexicon (NRCLex)** — discrete emotion profiling (scored by `emotion_engine.py`)
+- **scikit-learn (TF-IDF, cosine similarity) + NumPy** — content-based category matching and mood-search ranking
+- **Streamlit** — interactive dashboard UI, with the playlist view embedded as custom HTML/JS
+- **iTunes Search API** — track length, 30-second preview clips and store links (no key needed)
+- **Anthropic API (optional)** — grounded explanation of recommendations (RAG generation step)
 
 ## Tests
 
