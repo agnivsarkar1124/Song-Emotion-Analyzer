@@ -13,10 +13,15 @@ import time
 
 import requests
 import streamlit as st
+import streamlit.components.v1 as components
 from bs4 import BeautifulSoup
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
+
+from emotion_engine import analyze_lyrics, lexicon_available
+from mood_search import Calibration, MoodIndex, playlist_to_json
+from playlist_ui import render_playlist_html
 
 try:
     import anthropic
@@ -24,11 +29,7 @@ try:
 except ImportError:
     ANTHROPIC_AVAILABLE = False
 
-try:
-    from nrclex import NRCLex
-    NRCLEX_AVAILABLE = True
-except ImportError:
-    NRCLEX_AVAILABLE = False
+NRCLEX_AVAILABLE = lexicon_available()
 
 
 # --- Config -----------------------------------------------------------------
@@ -40,6 +41,12 @@ CATEGORY_TARGETS = {
     "Intense": {"mood": 0.17, "variance": 0.23},
     "Angry":   {"mood": -0.07, "variance": 0.23},
 }
+
+# Maps raw (mood, variance) onto the standardised valence/intensity axes used by
+# the free-text mood search; derived from the calibrated targets above.
+CALIBRATION = Calibration.from_targets(CATEGORY_TARGETS)
+
+MAX_MOOD_FILE_BYTES = 20_000
 
 SEED_SONGS = {
     "Happy": [("Happy", "Pharrell Williams"), ("Good as Hell", "Lizzo"), ("Walking on Sunshine", "Katrina and the Waves")],
@@ -124,32 +131,55 @@ def distance_similarity(mood, variance, category):
     return 1 / (1 + dist)
 
 
-def get_top_emotion(lyrics):
+def analyze_song_emotion(lyrics, mood=None):
+    """Full emotion analysis (top/secondary emotion, confidence, 8-way profile).
+    See emotion_engine.py for how this improves on a raw argmax over NRC counts."""
+    valence = CALIBRATION.valence(mood) if mood is not None else None
+    return analyze_lyrics(lyrics, valence)
+
+
+def get_top_emotion(lyrics, mood=None):
+    """Best-matching emotion for the lyrics, or None if no emotion words were found."""
     if not NRCLEX_AVAILABLE:
         return None
     try:
-        emotion = NRCLex(lyrics)
-        scores = emotion.raw_emotion_scores
-        if not scores:
-            return None
-        return max(scores, key=scores.get)
+        return analyze_song_emotion(lyrics, mood)["top_emotion"]
     except Exception:
         return None
 
 
 @st.cache_data(show_spinner=False)
-def build_reference_docs(token):
-    reference_docs = {}
+def build_seed_lyrics(token):
+    """{category: [(title, artist, lyrics), ...]} for the seed songs that could be fetched."""
+    seeds = {}
     for category, songs in SEED_SONGS.items():
-        lyrics_list = []
+        fetched = []
         for title, artist in songs:
             try:
-                lyrics_list.append(get_lyrics(title, artist, token))
+                fetched.append((title, artist, get_lyrics(title, artist, token)))
                 time.sleep(0.5)
             except ValueError:
                 continue
-        reference_docs[category] = " ".join(lyrics_list)
-    return reference_docs
+        seeds[category] = fetched
+    return seeds
+
+
+@st.cache_data(show_spinner=False)
+def build_reference_docs(token):
+    return {
+        category: " ".join(lyrics for _, _, lyrics in fetched)
+        for category, fetched in build_seed_lyrics(token).items()
+    }
+
+
+@st.cache_data(show_spinner=False)
+def build_seed_songs(token):
+    """The seed songs as full library records, so they can be searched like the user's own."""
+    return [
+        make_song_record(title, artist, lyrics)
+        for fetched in build_seed_lyrics(token).values()
+        for title, artist, lyrics in fetched
+    ]
 
 
 def tfidf_similarity(lyrics, ref_text):
@@ -160,25 +190,32 @@ def tfidf_similarity(lyrics, ref_text):
     return float(cosine_similarity(vectors[0], vectors[1])[0][0])
 
 
-def get_track_info(title, artist):
+def fetch_itunes_track(title, artist):
     """
-    Fetches duration and a 30-second preview clip URL via the iTunes Search
-    API (free, no auth required). Returns (duration_seconds, preview_url),
-    either of which may be None if unavailable.
+    Looks a song up on the iTunes Search API (free, no auth required) and returns
+    {"duration_seconds", "preview_url", "track_url"}; any value may be None.
     """
+    info = {"duration_seconds": None, "preview_url": None, "track_url": None}
     params = {"term": f"{title} {artist}", "media": "music", "entity": "song", "limit": 1}
     try:
         response = requests.get("https://itunes.apple.com/search", params=params, timeout=10)
         results = response.json().get("results", [])
         if not results:
-            return None, None
+            return info
         track = results[0]
         millis = track.get("trackTimeMillis")
-        duration = round(millis / 1000) if millis else None
-        preview_url = track.get("previewUrl")
-        return duration, preview_url
-    except requests.exceptions.RequestException:
-        return None, None
+        info["duration_seconds"] = round(millis / 1000) if millis else None
+        info["preview_url"] = track.get("previewUrl")
+        info["track_url"] = track.get("trackViewUrl")
+        return info
+    except (requests.exceptions.RequestException, ValueError):
+        return info
+
+
+def get_track_info(title, artist):
+    """Returns (duration_seconds, preview_url); either may be None if unavailable."""
+    info = fetch_itunes_track(title, artist)
+    return info["duration_seconds"], info["preview_url"]
 
 
 def format_duration(seconds):
@@ -188,13 +225,12 @@ def format_duration(seconds):
     return f"{minutes}:{secs:02d}"
 
 
-def add_song_to_library(title, artist, token):
-    lyrics = get_lyrics(title, artist, token)
+def make_song_record(title, artist, lyrics):
+    """Score already-fetched lyrics and package them as a library entry."""
     mood, variance = get_song_mood(lyrics)
     category = nearest_category_by_mood(mood, variance)
-    top_emotion = get_top_emotion(lyrics)
-    word_count = len(lyrics.split())
-    duration_seconds, preview_url = get_track_info(title, artist)
+    emotion = analyze_song_emotion(lyrics, mood) if NRCLEX_AVAILABLE else None
+    track = fetch_itunes_track(title, artist)
 
     return {
         "title": title,
@@ -203,11 +239,18 @@ def add_song_to_library(title, artist, token):
         "mood": mood,
         "variance": variance,
         "category": category,
-        "top_emotion": top_emotion or "-",
-        "word_count": word_count,
-        "duration_seconds": duration_seconds,
-        "preview_url": preview_url,
+        "top_emotion": (emotion or {}).get("top_emotion") or "-",
+        "emotion_confidence": (emotion or {}).get("confidence"),
+        "emotion_analysis": emotion,
+        "word_count": len(lyrics.split()),
+        "duration_seconds": track["duration_seconds"],
+        "preview_url": track["preview_url"],
+        "track_url": track["track_url"],
     }
+
+
+def add_song_to_library(title, artist, token):
+    return make_song_record(title, artist, get_lyrics(title, artist, token))
 
 
 def recommend_songs(library, category, k, reference_docs, cosine_weight=0.6):
@@ -324,13 +367,23 @@ def generate_rag_explanation(recommendations, category, api_key):
 
 # --- Streamlit UI ---------------------------------------------------------------
 
-st.set_page_config(page_title="Song Mood Explorer", page_icon="🎵", layout="centered")
+def show_html(html, height):
+    """Embed a self-contained HTML page. st.components.v1.html is deprecated in newer
+    Streamlit in favour of st.iframe, so prefer that and fall back for older versions.
+    Only pass HTML we generated ourselves (playlist_ui escapes all scraped text)."""
+    if hasattr(st, "iframe"):
+        st.iframe(html, height=height)
+    else:
+        components.html(html, height=height, scrolling=False)
+
+
+st.set_page_config(page_title="Song Mood Explorer", page_icon="🎵", layout="wide")
 
 st.title("🎵 Song Mood Explorer")
 st.caption(
-    "Build a curated playlist, see each song's emotional fingerprint, and get "
-    "recommendations by mood - powered by VADER sentiment, the NRC emotion "
-    "lexicon, and TF-IDF content similarity."
+    "Build a curated library, see each song's emotional fingerprint, describe any mood "
+    "in your own words to get a playlist, or pick a preset mood - powered by VADER "
+    "sentiment, the NRC emotion lexicon, and TF-IDF content similarity."
 )
 
 if "library" not in st.session_state:
@@ -387,6 +440,85 @@ if add_clicked:
         except requests.exceptions.RequestException as e:
             st.error(f"Network error reaching Genius: {e}")
 
+# --- Describe a mood -> playlist (retrieve step of the RAG pipeline) ---
+st.subheader("🔎 Describe a mood, get a playlist")
+st.caption(
+    "Write it any way you like - 'chill but slightly nostalgic for a rainy day', 'angry gym "
+    "playlist', 'very romantic, not sad'. Your words are mapped into the same emotion space as "
+    "every song's lyrics, and the K closest tracks by semantic distance are returned."
+)
+desc_col, opt_col = st.columns([3, 1])
+with desc_col:
+    mood_text = st.text_area(
+        "Mood description", height=100, max_chars=500,
+        placeholder="e.g. chill but slightly nostalgic for a rainy day",
+        label_visibility="collapsed",
+    )
+    mood_file = st.file_uploader("...or upload a .txt file containing your description", type=["txt"])
+with opt_col:
+    mood_k = st.slider("Tracks in playlist", min_value=1, max_value=15, value=5)
+    include_seeds = st.checkbox(
+        "Also search the 15 seed songs", value=True,
+        help="The reference songs used to calibrate each mood category are searchable too, "
+             "so you get results even with an empty library.",
+    )
+build_clicked = st.button("Build playlist", type="primary", use_container_width=True)
+
+if build_clicked:
+    description = mood_text.strip()
+    if not description and mood_file is not None:
+        raw = mood_file.getvalue()
+        if len(raw) > MAX_MOOD_FILE_BYTES:
+            st.warning(f"That file is larger than {MAX_MOOD_FILE_BYTES // 1000} KB - paste a shorter description.")
+        else:
+            description = raw.decode("utf-8", errors="ignore").strip()
+
+    if not description:
+        st.warning("Describe a mood first (type it above or upload a .txt file).")
+    else:
+        database = list(st.session_state.library)
+        if include_seeds:
+            with st.spinner("Loading seed songs (first run only)..."):
+                known = {(s["title"].lower(), s["artist"].lower()) for s in database}
+                database += [s for s in build_seed_songs(token)
+                             if (s["title"].lower(), s["artist"].lower()) not in known]
+        try:
+            with st.spinner(f"Searching {len(database)} songs..."):
+                playlist, hits = MoodIndex(database, CALIBRATION).search(description, k=mood_k)
+            st.session_state.mood_playlist = playlist
+            st.session_state.mood_hits = hits
+        except ValueError as e:
+            st.warning(str(e))
+
+mood_playlist = st.session_state.get("mood_playlist")
+if mood_playlist:
+    show_html(render_playlist_html(mood_playlist), height=740)
+    act1, act2 = st.columns(2)
+    with act1:
+        st.download_button(
+            "⬇️ Download playlist as JSON", playlist_to_json(mood_playlist),
+            file_name="mood_playlist.json", mime="application/json", use_container_width=True,
+        )
+    with act2:
+        explain_mood_clicked = st.button("🤖 Explain this playlist", use_container_width=True)
+    if explain_mood_clicked:
+        if not anthropic_key:
+            st.warning("Enter an Anthropic API key in the sidebar to use this feature.")
+        else:
+            with st.spinner("Generating a grounded explanation..."):
+                explanation, error = generate_rag_explanation(
+                    st.session_state.mood_hits, mood_playlist["query"], anthropic_key
+                )
+            if error:
+                st.error(error)
+            else:
+                st.markdown("**Why these tracks fit your description:**")
+                st.write(explanation)
+                st.caption(
+                    "Generated from the retrieved lyric excerpts and scores only - "
+                    "not general knowledge about these songs."
+                )
+
 # --- Library table ---
 if st.session_state.library:
     st.subheader(f"Your library ({len(st.session_state.library)} songs)")
@@ -400,6 +532,7 @@ if st.session_state.library:
             "Variance": s["variance"],
             "Category": s["category"],
             "Top emotion": s["top_emotion"],
+            "Emotion conf.": s.get("emotion_confidence"),
         }
         for s in st.session_state.library
     ]
@@ -472,4 +605,5 @@ if st.session_state.library:
                         "not general knowledge about these songs."
                     )
 else:
-    st.info("Add a few songs above to build your library, then get mood-based recommendations.")
+    st.info("Add a few songs above to build your library, then get mood-based recommendations "
+            "by preset category. (The free-text playlist builder above also works on the seed songs alone.)")

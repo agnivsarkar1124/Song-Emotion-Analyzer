@@ -5,3 +5,4 @@ vaderSentiment
 scikit-learn
 nrclex==3.0.0
 nltk
+numpy
