@@ -8,3 +8,4 @@ lyrics_cache.json
 taste_profile.json
 .DS_Store
 benchmark_cache.json
+.embedding_cache/

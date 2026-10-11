@@ -18,6 +18,7 @@ from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity
 
 import neural_ranker
+import semantic
 import taste_ui
 from mood_search import MoodIndex, playlist_to_json, song_key
 from pipeline import (CALIBRATION, CATEGORY_TARGETS, SEED_SONGS, distance_similarity, format_duration,
@@ -207,6 +208,7 @@ EXAMPLE_MOODS = [
     "angry gym playlist",
     "very romantic, not sad",
     "dreamy late-night drive",
+    "missing someone who moved away",
 ]
 ACTION_TOAST = {"like": "❤️ Liked", "dislike": "👎 Not for you:", "save": "⭐ Saved", "skip": "⏭️ Skipped",
                 "unsave": "☆ Removed from saved:", "clear": "↺ Cleared your rating for"}
@@ -339,6 +341,9 @@ with st.sidebar:
     st.markdown(f"**{rated}** songs rated · **{len(events)}** actions")
     info = neural_ranker.backend_info()
     st.caption(("🧠 Neural model: " if info["available"] else "📐 ") + info["label"])
+    search_status = semantic.status()
+    st.caption(("🔎 Lyric search: " if search_status["active"] or semantic.installed() else "🔤 Lyric search: ")
+               + search_status["label"])
     st.download_button(
         "⬇️ Download profile", json.dumps({"version": 1, "events": [e.__dict__ for e in events]}),
         file_name="taste_profile.json", mime="application/json", use_container_width=True, disabled=not events,
@@ -416,7 +421,10 @@ with tab_mix:
         mix = None
         if database:
             try:
-                index = get_index(database)
+                with st.spinner("Indexing lyrics (the first semantic search downloads a ~90 MB language model)..."):
+                    index = get_index(database)
+                if index.semantic_error:
+                    st.caption(f"Semantic search unavailable, using keywords: {index.semantic_error}")
                 scored = index.score_all(query["description"])
                 with st.spinner("Personalising..."):
                     mix = personalize(index, scored, st.session_state.taste_events, k=query["k"])

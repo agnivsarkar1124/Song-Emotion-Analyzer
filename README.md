@@ -22,11 +22,17 @@ Type (or upload a `.txt` file with) any mood description — *"chill but slightl
 How retrieval works (`mood_search.py`):
 
 1. **Query → mood space.** A small mood lexicon maps words to a valence/intensity position, an emotion mix and lyric keywords (query expansion: "rainy" → rain, storm, grey…). Modifiers scale the effect ("*slightly* nostalgic" counts for less than "*very* nostalgic") and negation flips it ("not sad").
-2. **Every song lives in the same space:** standardised VADER mood and variance, an 8-way NRC emotion profile, and a TF-IDF vector over its lyrics.
-3. **Distance** = `1 − (0.35·cos(emotion profiles) + 0.40·exp(−d²/2σ²) over (valence, intensity) + 0.25·tanh(cos(TF-IDF)/0.12))`. The K smallest distances are the playlist; each track reports its three component scores so you can see *why* it matched.
+2. **Every song lives in the same space:** standardised VADER mood and variance, an 8-way NRC emotion profile, and what its lyrics are *about*: transformer sentence embeddings (semantic search, below) plus a TF-IDF vector for exact keywords.
+3. **Distance** = `1 − (w_emotion·cos(emotion profiles) + w_mood·exp(−d²/2σ²) over (valence, intensity) + w_theme·theme)`, with weights 0.30 / 0.35 / 0.35 and `theme = 0.75·semantic + 0.25·keyword` when semantic search is on (0.35 / 0.40 / 0.25 and keyword-only otherwise). The K smallest distances are the playlist; each track reports its component scores so you can see *why* it matched.
 4. The retrieved lyrics also feed the existing **"Explain this playlist"** step, which asks Claude to explain the picks using only those excerpts.
 
-This is an interpretable hybrid, **not a neural embedding** (see the PyTorch note below). Its weights and the hand-written mood lexicon have not been tuned against labelled data.
+The emotion and mood axes stay interpretable on purpose; the transformer handles meaning. The weights and the hand-written mood lexicon have not been tuned against labelled data.
+
+### Semantic search (transformers)
+
+With `sentence-transformers` installed (it's in `requirements-ml.txt`), `semantic.py` embeds every song's lyrics in two-line chunks with **all-MiniLM-L6-v2** and compares them with your description by cosine similarity. A song's semantic score blends its best-matching chunk with its top-3 average, so a query like *"missing someone who moved away"* finds a song about an empty room and a phone that never rings, even with no words in common. The card shows the lyric lines that matched best, and descriptions with no mood words at all (which keyword search used to reject) now work. Embeddings are computed once and cached as vectors in `.embedding_cache/` (gitignored), so searches stay fast. The model (~90 MB) downloads on first use. Without the library, or offline, the app falls back to keyword search; the header badge and sidebar say which is active. `SONG_MOOD_DISABLE_SEMANTIC=1` forces keywords, and `SONG_MOOD_EMBEDDING_MODEL` swaps the model.
+
+Two engineering notes from making PyTorch and TensorFlow share one process: importing TensorFlow *before* the sentence-transformers stack segfaulted the whole app (reproduced on Linux with TF 2.21, torch 2.14, transformers 5), so `neural_ranker.py` preloads that stack first, and a subprocess regression test guards it. Streamlit's auto-reload watcher also trips over `transformers`' lazy imports, so `.streamlit/config.toml` turns it off; restart the app after editing code.
 
 The emotion label itself is also better than before (`emotion_engine.py`). The old `argmax` over raw NRC counts frequently returned the lexicon's `positive` / `negative` polarity tags rather than an emotion, was biased toward whichever emotions tag the most words, counted negated words ("never happy") and counted a chorus every time it repeated. The new scorer drops polarity tags, normalises by each emotion's base rate (square-root-corrected, with smoothing), skips negated words, damps repeated lines, and nudges scores toward emotions that agree with the song's overall tone, then reports a confidence margin. Anger vs. fear vs. sadness is still the hard case for any word-lexicon method — check the confidence value.
 
@@ -88,11 +94,11 @@ Run locally (a virtual environment keeps the dependencies tidy):
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-pip install -r requirements-ml.txt   # optional: the Keras Wide & Deep model
+pip install -r requirements-ml.txt   # optional: Keras Wide & Deep model + semantic search
 streamlit run app.py
 ```
 
-`requirements-ml.txt` only installs what your machine supports. TensorFlow ships wheels for Apple Silicon, Linux and Windows on Python 3.10–3.13. On Python 3.14 it uses Keras on the JAX backend instead. **Intel Macs:** TensorFlow's last Intel-Mac release is 2.16.2 (Python 3.9–3.12), and there are no JAX wheels, so on Python 3.13+ nothing installs and the app runs on the linear taste model alone. For the neural model there, create the venv with Python 3.12 (`python3.12 -m venv venv`, e.g. after `brew install python@3.12`). The sidebar shows which model is active. Set `SONG_MOOD_DISABLE_NEURAL=1` to force the linear model.
+`requirements-ml.txt` only installs what your machine supports. TensorFlow ships wheels for Apple Silicon, Linux and Windows on Python 3.10–3.13. On Python 3.14 it uses Keras on the JAX backend instead. **Intel Macs:** TensorFlow's last Intel-Mac release is 2.16.2 (Python 3.9–3.12), and there are no JAX wheels, so on Python 3.13+ nothing installs and the app runs on the linear taste model alone. For the neural model there, create the venv with Python 3.12 (`python3.12 -m venv venv`, e.g. after `brew install python@3.12`). The same file installs `sentence-transformers` (PyTorch) for semantic search: Apple Silicon on Python 3.10–3.14, Linux and Windows, and Intel Macs on Python ≤3.12 (PyTorch's last Intel-Mac release is 2.2.2). The sidebar shows which models are active. Set `SONG_MOOD_DISABLE_NEURAL=1` to force the linear model.
 
 Then paste your Genius token into the sidebar, add some songs, and try a mood description. Genius blocks scraping from cloud hosting IPs, so lyric fetching only works when you run the app on your own machine.
 
@@ -109,7 +115,7 @@ python benchmark.py --token YOUR_GENIUS_TOKEN     # real lyrics for the songs in
 python benchmark.py --synthetic                   # quick check that it runs (numbers not meaningful)
 ```
 
-The first real run fetches ~65 songs' lyrics from Genius and caches them in `benchmark_cache.json` (gitignored, since lyrics are copyrighted), so later runs are offline and fast. It prints a results table, a per-listener breakdown and a headline line, and saves `benchmark_results.json`.
+The first real run fetches ~65 songs' lyrics from Genius and caches them in `benchmark_cache.json` (gitignored, since lyrics are copyrighted), so later runs are offline and fast. It prints a results table, a per-listener breakdown and a headline line, and saves `benchmark_results.json`. If semantic search is installed, the mood ranking uses it; add `--semantic off` to benchmark with keyword search instead.
 
 Read the numbers honestly: the listeners' tastes are hand-written over the same kinds of features the model sees, so this tests whether the loop *recovers a known taste*, not whether real people are happier. Quote results as "on simulated listeners". The random-taste control is there on purpose: personalisation can't help it and, with a 45% personalisation weight, actively hurts it, which is a real limitation (a confidence-aware personalisation weight would be the fix).
 
@@ -122,6 +128,7 @@ Read the numbers honestly: the listeners' tastes are hand-written over the same 
 | `mood_search.py` | Free-text mood parsing, in-memory index, semantic-distance scoring of every song, JSON playlist |
 | `emotion_engine.py` | Lyric emotion scoring (NRC lexicon with base-rate correction, negation, repeat damping, tone prior) |
 | `themes.py` | 13 interpretable lyrical themes per song |
+| `semantic.py` | Optional transformer semantic search: lyric chunking, cached embeddings, best-matching lines |
 | `preferences.py` | Feedback events, taste features, ridge taste model, profile history, personalised re-ranking + comparison |
 | `neural_ranker.py` | Optional Keras Wide & Deep taste network (TensorFlow or JAX backend) + cross-validation |
 | `taste_ui.py` | The interactive two-way component (HTML/CSS/JS) and its view model |
@@ -139,7 +146,7 @@ This project surfaced several real problems worth documenting, not just a featur
 
 **Sentiment polarity can't distinguish anger from sadness.** Both register as simply "negative" under VADER, so aggressive songs and heartbroken ballads scored similarly and were frequently misclassified against each other. Adding the **NRC Emotion Lexicon** as a second signal — which scores discrete emotions like anger and sadness independently, rather than a single positive/negative axis — addressed this directly.
 
-**Infrastructure constraints shape technical decisions.** An initial attempt to use transformer-based sentence embeddings (`sentence-transformers`) hit a hard wall: no PyTorch wheel exists for Intel Mac + Python 3.14, and every version of the library depends on PyTorch. Rather than fighting the environment, the project fell back to TF-IDF for content similarity — a real example of adapting method choice to actual infrastructure rather than assuming the most sophisticated tool is always available.
+**Infrastructure constraints shape technical decisions.** An initial attempt to use transformer-based sentence embeddings (`sentence-transformers`) hit a hard wall: no PyTorch wheel exists for Intel Mac + Python 3.14, and every version of the library depends on PyTorch. Rather than fighting the environment, the project fell back to TF-IDF for content similarity — a real example of adapting method choice to actual infrastructure rather than assuming the most sophisticated tool is always available. Moving development to a supported Python (Apple Silicon, Python 3.13) later made embeddings possible, so semantic search was added as an *optional* layer on top of TF-IDF rather than a replacement: machines that can't install PyTorch still get a working app.
 
 **A wrong search result can silently corrupt a whole pipeline.** The Genius search API occasionally returns the wrong song (e.g. searching without enough context can return a completely different track), producing lyrics that look plausible but are wrong. This is now guarded against with an explicit artist-name check and a clear failure message instead of failing silently.
 
@@ -149,7 +156,8 @@ This project surfaced several real problems worth documenting, not just a featur
 - **BeautifulSoup** — HTML parsing/scraping
 - **VADER Sentiment** — line-level sentiment scoring
 - **NRC Emotion Lexicon (NRCLex)** — discrete emotion profiling (scored by `emotion_engine.py`)
-- **scikit-learn (TF-IDF, cosine similarity) + NumPy** — content-based category matching and mood-search ranking
+- **sentence-transformers (all-MiniLM-L6-v2, PyTorch), optional** — semantic lyric search with line-level matches
+- **scikit-learn (TF-IDF, cosine similarity) + NumPy** — keyword matching, category matching and mood-search ranking
 - **Streamlit** — app UI, with a custom two-way component (`st.components.v2`, vanilla JS + SVG charts)
 - **Keras 3 + TensorFlow / JAX (optional)** — Wide & Deep neural taste model
 - **NumPy ridge regression** — interpretable, always-on taste model with emotion × energy interactions
@@ -163,12 +171,13 @@ pip install pytest
 pytest
 ```
 
-The tests use small synthetic lyrics and simulated listeners (no real songs) and cover the emotion scorer, query parsing, ranking, the taste model (including sad vs sad + energetic), feedback persistence, re-ranking and comparison, the component's view data, and, when Keras is installed, that the Wide & Deep network learns an interaction and that its NumPy forward pass matches Keras.
+The tests use small synthetic lyrics and simulated listeners (no real songs) and cover the emotion scorer, query parsing, ranking, the taste model (including sad vs sad + energetic), feedback persistence, re-ranking and comparison, the component's view data, semantic search (with a stand-in encoder: paraphrase matching, caching, fallback), the benchmark, and, when Keras is installed, that the Wide & Deep network learns an interaction and that its NumPy forward pass matches Keras. `SONG_MOOD_TEST_REAL_MODEL=1 pytest` also runs a check with the real embedding model.
 
 ## Possible next steps
 
 - Ground-truth evaluation: hand-label a small test set and measure actual classifier accuracy (and tune the retrieval weights and emotion priors against it)
-- Swap the theme channel for sentence embeddings where a PyTorch wheel exists (`MoodIndex` keeps the channels separate, so this is a local change)
+- Evaluate semantic vs keyword search on a small hand-labelled query set (recall of the songs a person would pick)
+- Feed compressed lyric embeddings into the taste model so it can learn "songs like these" beyond the 13 themes
 - Tune the taste model's penalties and blend schedule against real feedback logs (the cross-validation button is the starting point)
 - Time-of-day-aware recommendations (map current time to a target mood category automatically)
 - Multi-language support (current pipeline assumes English-language lyrics and lexicons)

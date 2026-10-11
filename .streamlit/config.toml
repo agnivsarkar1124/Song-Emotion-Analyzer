@@ -7,3 +7,9 @@ textColor = "#f5f3ff"
 
 [browser]
 gatherUsageStats = false
+
+[server]
+# Streamlit's auto-reload watcher walks every loaded module, which trips over the lazy
+# imports inside `transformers` (semantic search) and floods the terminal with harmless
+# errors. With it off, restart `streamlit run app.py` after editing code.
+fileWatcherType = "none"
