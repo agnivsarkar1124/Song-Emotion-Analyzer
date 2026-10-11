@@ -2,7 +2,7 @@
 
 An interactive dashboard that classifies songs by emotional category using their **actual lyrics** — not genre tags, not audio features, just the words themselves.
 
-Enter a song and artist, and it fetches the lyrics, scores mood and emotional volatility, profiles discrete emotions, and predicts which of five mood categories the song belongs to — all visualized live. You can also **describe a mood in your own words** and get back a ranked JSON playlist, shown in an interactive tabbed view.
+Enter a song and artist, and it fetches the lyrics, scores mood and emotional volatility, profiles discrete emotions, and predicts which of five mood categories the song belongs to — all visualized live. You can also **describe a mood in your own words** and get a ranked playlist, then **like, nope, save or skip** songs and watch a taste model learn what you actually want and re-rank the mix around it.
 
 ## What it does
 
@@ -17,7 +17,7 @@ Enter a song and artist, and it fetches the lyrics, scores mood and emotional vo
 
 ## Describe a mood, get a playlist
 
-Type (or upload a `.txt` file with) any mood description — *"chill but slightly nostalgic for a rainy day"*, *"angry gym playlist"*, *"very romantic, not sad"* — and the app returns the **top K closest songs** from your library (plus the 15 seed songs, optionally) as a structured JSON playlist and an interactive view with four tabs: **Playlist** (colour-coded, scrollable, click a card for score breakdown, preview clip and search links), **Mood map** (valence × intensity scatter; click a dot to jump to its card), **Breakdown** (how your words were interpreted), and **JSON** (copy / download).
+Type (or upload a `.txt` file with) any mood description — *"chill but slightly nostalgic for a rainy day"*, *"angry gym playlist"*, *"very romantic, not sad"* — and the app returns the **top K closest songs** from your library (plus the 15 seed songs, optionally) as a structured JSON playlist, inside the interactive mix described in the next section.
 
 How retrieval works (`mood_search.py`):
 
@@ -29,6 +29,29 @@ How retrieval works (`mood_search.py`):
 This is an interpretable hybrid, **not a neural embedding** (see the PyTorch note below). Its weights and the hand-written mood lexicon have not been tuned against labelled data.
 
 The emotion label itself is also better than before (`emotion_engine.py`). The old `argmax` over raw NRC counts frequently returned the lexicon's `positive` / `negative` polarity tags rather than an emotion, was biased toward whichever emotions tag the most words, counted negated words ("never happy") and counted a chorus every time it repeated. The new scorer drops polarity tags, normalises by each emotion's base rate (square-root-corrected, with smoothing), skips negated words, damps repeated lines, and nudges scores toward emotions that agree with the song's overall tone, then reports a confidence margin. Anger vs. fear vs. sadness is still the hard case for any word-lexicon method — check the confidence value.
+
+## Personalised recommendations: a feedback loop that learns your taste
+
+The mix is a two-way custom Streamlit component (`taste_ui.py`, built on `st.components.v2`) with six tabs:
+
+| Tab | What you do there |
+| --- | --- |
+| 🎧 **For you** | Personalised ranking. ❤️ like / 👎 nope / ⭐ save / ⏭️ skip any card; the list re-ranks itself with animated moves, ▲/▼ badges show how far each song moved, and chips say why ("+ sad and energetic", "− lyrics about party & dance"). |
+| 🃏 **Rate** | A swipe deck of the songs the model is *least sure about* (active learning: the ratings that teach it the most). Drag the card, or use ← → ↑ ↓. |
+| 🧬 **Your taste** | Plain-language insights, an emotion × energy heat map, theme leanings, what your last rating changed, and a chart of how your profile evolved with every action. |
+| ⚖️ **Compare** | Original (mood-only) vs personalised ranking as a slopegraph, plus overlap@K, Spearman rank correlation, songs added/dropped and why (with "undo nope"). |
+| ⭐ **Saved** | Your saved songs, exportable as JSON. |
+| { } **JSON** | The personalised playlist JSON. |
+
+**What the model learns** (`preferences.py`, `themes.py`). Every song becomes a vector of standardised, readable features: tone (dark ↔ bright), energy (VADER line-to-line swing), its 8-way emotion mix, 13 lyrical themes (rain & weather, memories, heartbreak, night & city, …), and **interaction terms** emotion × energy. A like is +1, a nope −1, a save a stronger +1, a skip a weak −1 ("not now" ≠ "never"); your latest rating of a song replaces the earlier one. Weighted ridge regression fits a weight per feature in closed form after every click.
+
+**"I like sad songs" vs "I like sad songs that are energetic".** The first is a positive weight on `sadness`; the second is a positive weight on `sadness × energy`, with little or no main-effect preference for sadness. Interaction terms carry a 3× larger ridge penalty, so the model only reaches for "sad *and* energetic" when your ratings actually require it (for example you like sad + energetic songs, nope sad + calm ones, *and* nope happy + energetic ones, so it isn't just "likes energy"). The emotion × energy grid in **Your taste** makes the difference visible, and `tests/test_preferences.py` checks both users end up with different profiles and rank the same unseen songs differently.
+
+**Keras / TensorFlow: a Wide & Deep network** (`neural_ranker.py`). When TensorFlow (or JAX) is installed, a small Keras *Wide & Deep* model (Google's classic recommender architecture) trains on the same ratings: the *wide* part is a linear layer over every feature including the hand-made crosses (memorisation), and the *deep* part is a 16→8 ReLU MLP over the main features that can discover interactions nobody coded (generalisation). Its share of the taste score grows with your number of ratings (up to 60%), because a neural net trained on five ratings is mostly noise. The ridge weights stay the explanation layer, because they can be read directly. Training reuses one compiled model and resets its weights (~0.2 s per click instead of ~1.2 s for a rebuild), and predictions run as a NumPy forward pass that the tests check against Keras's own output. The sidebar's **"Is the neural net helping?"** button runs 5-fold cross-validation on *your* ratings and reports linear vs Wide & Deep accuracy, so you can see whether the network earns its place.
+
+**Re-ranking.** `personal = (1 − a)·mood_match + a·(taste + 1)/2 − 0.04·skips`, where the personalisation weight `a` grows from 0 to at most 0.45 as you give feedback. Disliked songs are hidden from the personalised list. Feedback is saved to `taste_profile.json` next to `app.py` (titles and features only, no lyrics). You can download, load or reset it from the sidebar.
+
+Honest caveats: the feature weights, penalties and blend schedules are reasonable defaults, not tuned values. With only a few dozen songs in the database, personalisation mostly re-orders a small pool. It shines once your library is bigger.
 
 ### Example playlist JSON
 
@@ -65,8 +88,11 @@ Run locally (a virtual environment keeps the dependencies tidy):
 python3 -m venv venv
 source venv/bin/activate        # Windows: venv\Scripts\activate
 pip install -r requirements.txt
+pip install -r requirements-ml.txt   # optional: the Keras Wide & Deep model
 streamlit run app.py
 ```
+
+`requirements-ml.txt` only installs what your machine supports. TensorFlow ships wheels for Apple Silicon, Linux and Windows on Python 3.10–3.13. On Python 3.14 it uses Keras on the JAX backend instead. **Intel Macs:** TensorFlow's last Intel-Mac release is 2.16.2 (Python 3.9–3.12), and there are no JAX wheels, so on Python 3.13+ nothing installs and the app runs on the linear taste model alone. For the neural model there, create the venv with Python 3.12 (`python3.12 -m venv venv`, e.g. after `brew install python@3.12`). The sidebar shows which model is active. Set `SONG_MOOD_DISABLE_NEURAL=1` to force the linear model.
 
 Then paste your Genius token into the sidebar, add some songs, and try a mood description. Genius blocks scraping from cloud hosting IPs, so lyric fetching only works when you run the app on your own machine.
 
@@ -74,11 +100,15 @@ Then paste your Genius token into the sidebar, add some songs, and try a mood de
 
 | File | Purpose |
 | --- | --- |
-| `app.py` | Streamlit UI, lyric fetching (Genius), per-song scoring, preset-category recommendations, RAG explanation |
-| `mood_search.py` | Free-text mood parsing, in-memory index, top-K semantic-distance search, JSON playlist |
+| `app.py` | Streamlit app: tabs (Mood mix, Library, Preset moods), lyric fetching (Genius), per-song scoring, feedback handling, taste-profile sidebar, RAG explanation |
+| `mood_search.py` | Free-text mood parsing, in-memory index, semantic-distance scoring of every song, JSON playlist |
 | `emotion_engine.py` | Lyric emotion scoring (NRC lexicon with base-rate correction, negation, repeat damping, tone prior) |
-| `playlist_ui.py` | Self-contained HTML/CSS/JS tabbed playlist view (Playlist, Mood map, Breakdown, JSON) |
-| `tests/` | Unit tests using synthetic lyrics |
+| `themes.py` | 13 interpretable lyrical themes per song |
+| `preferences.py` | Feedback events, taste features, ridge taste model, profile history, personalised re-ranking + comparison |
+| `neural_ranker.py` | Optional Keras Wide & Deep taste network (TensorFlow or JAX backend) + cross-validation |
+| `taste_ui.py` | The interactive two-way component (HTML/CSS/JS) and its view model |
+| `.streamlit/config.toml` | Dark theme matching the mix |
+| `tests/` | Unit tests using synthetic lyrics and synthetic listeners |
 
 ## The technical story
 
@@ -101,7 +131,9 @@ This project surfaced several real problems worth documenting, not just a featur
 - **VADER Sentiment** — line-level sentiment scoring
 - **NRC Emotion Lexicon (NRCLex)** — discrete emotion profiling (scored by `emotion_engine.py`)
 - **scikit-learn (TF-IDF, cosine similarity) + NumPy** — content-based category matching and mood-search ranking
-- **Streamlit** — interactive dashboard UI, with the playlist view embedded as custom HTML/JS
+- **Streamlit** — app UI, with a custom two-way component (`st.components.v2`, vanilla JS + SVG charts)
+- **Keras 3 + TensorFlow / JAX (optional)** — Wide & Deep neural taste model
+- **NumPy ridge regression** — interpretable, always-on taste model with emotion × energy interactions
 - **iTunes Search API** — track length, 30-second preview clips and store links (no key needed)
 - **Anthropic API (optional)** — grounded explanation of recommendations (RAG generation step)
 
@@ -112,11 +144,12 @@ pip install pytest
 pytest
 ```
 
-The tests use small synthetic lyrics (no real songs) and cover the emotion scorer, query parsing, ranking, JSON schema and HTML escaping.
+The tests use small synthetic lyrics and simulated listeners (no real songs) and cover the emotion scorer, query parsing, ranking, the taste model (including sad vs sad + energetic), feedback persistence, re-ranking and comparison, the component's view data, and, when Keras is installed, that the Wide & Deep network learns an interaction and that its NumPy forward pass matches Keras.
 
 ## Possible next steps
 
 - Ground-truth evaluation: hand-label a small test set and measure actual classifier accuracy (and tune the retrieval weights and emotion priors against it)
 - Swap the theme channel for sentence embeddings where a PyTorch wheel exists (`MoodIndex` keeps the channels separate, so this is a local change)
+- Tune the taste model's penalties and blend schedule against real feedback logs (the cross-validation button is the starting point)
 - Time-of-day-aware recommendations (map current time to a target mood category automatically)
 - Multi-language support (current pipeline assumes English-language lyrics and lexicons)
