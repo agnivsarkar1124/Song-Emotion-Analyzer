@@ -1,0 +1,66 @@
+# Song set for benchmark.py, one "Title | Artist" per line. Edit freely; ~60 varied songs works well.
+Someone Like You | Adele
+Skinny Love | Bon Iver
+Someone You Loved | Lewis Capaldi
+Hurt | Johnny Cash
+Mad World | Gary Jules
+The Night We Met | Lord Huron
+Fix You | Coldplay
+Hallelujah | Jeff Buckley
+Tears in Heaven | Eric Clapton
+Everybody Hurts | R.E.M.
+Dancing On My Own | Robyn
+Mr. Brightside | The Killers
+Somebody That I Used to Know | Gotye
+Boulevard of Broken Dreams | Green Day
+Chandelier | Sia
+Love Will Tear Us Apart | Joy Division
+Since U Been Gone | Kelly Clarkson
+In the End | Linkin Park
+Numb | Linkin Park
+Smells Like Teen Spirit | Nirvana
+Happy | Pharrell Williams
+Uptown Funk | Mark Ronson
+Shake It Off | Taylor Swift
+Walking on Sunshine | Katrina and the Waves
+Good as Hell | Lizzo
+Dancing Queen | ABBA
+Don't Stop Me Now | Queen
+Here Comes the Sun | The Beatles
+Can't Stop the Feeling! | Justin Timberlake
+Good Vibrations | The Beach Boys
+Banana Pancakes | Jack Johnson
+Sunday Morning | Maroon 5
+Redbone | Childish Gambino
+Riptide | Vance Joy
+Electric Feel | MGMT
+Put Your Records On | Corinne Bailey Rae
+Better Together | Jack Johnson
+Killing in the Name | Rage Against the Machine
+Break Stuff | Limp Bizkit
+Bodies | Drowning Pool
+Before I Forget | Slipknot
+Last Resort | Papa Roach
+Down with the Sickness | Disturbed
+Perfect | Ed Sheeran
+Thinking Out Loud | Ed Sheeran
+All of Me | John Legend
+At Last | Etta James
+Can't Help Falling in Love | Elvis Presley
+Make You Feel My Love | Adele
+Summer of '69 | Bryan Adams
+Wake Me Up When September Ends | Green Day
+Photograph | Ed Sheeran
+7 Years | Lukas Graham
+Have You Ever Seen the Rain | Creedence Clearwater Revival
+Purple Rain | Prince
+Set Fire to the Rain | Adele
+November Rain | Guns N' Roses
+Midnight City | M83
+Night Changes | One Direction
+Believer | Imagine Dragons
+Radioactive | Imagine Dragons
+Eye of the Tiger | Survivor
+Hall of Fame | The Script
+Rise Up | Andra Day
+Fighter | Christina Aguilera
