@@ -1,0 +1,155 @@
+{
+  "songs": 65,
+  "synthetic": false,
+  "k": 5,
+  "seeds": 3,
+  "queries": [
+    "chill but slightly nostalgic for a rainy day",
+    "sad but energetic",
+    "angry gym playlist",
+    "very romantic, not sad",
+    "dreamy late-night drive"
+  ],
+  "listeners": [
+    "likes sad songs",
+    "likes sad songs only when energetic",
+    "likes bright, calm songs",
+    "likes lyrics about memories and rain",
+    "likes joy, can't stand anger",
+    "random taste (control)"
+  ],
+  "neural": true,
+  "results": {
+    "10": {
+      "mood only (no personalization)": {
+        "ndcg": 0.6655,
+        "ndcg_ci95": 0.0577,
+        "precision": 0.368,
+        "precision_ci95": 0.0627,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.5262,
+          "likes sad songs only when energetic": 0.8139,
+          "likes bright, calm songs": 0.6463,
+          "likes lyrics about memories and rain": 0.6781,
+          "likes joy, can't stand anger": 0.6631,
+          "random taste (control)": 0.6352
+        }
+      },
+      "linear taste model": {
+        "ndcg": 0.7633,
+        "ndcg_ci95": 0.0471,
+        "precision": 0.5253,
+        "precision_ci95": 0.066,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.74,
+          "likes sad songs only when energetic": 0.7499,
+          "likes bright, calm songs": 0.832,
+          "likes lyrics about memories and rain": 0.7487,
+          "likes joy, can't stand anger": 0.7461,
+          "random taste (control)": 0.5882
+        }
+      },
+      "linear, no interaction terms": {
+        "ndcg": 0.7566,
+        "ndcg_ci95": 0.0466,
+        "precision": 0.5173,
+        "precision_ci95": 0.0653,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.7135,
+          "likes sad songs only when energetic": 0.7389,
+          "likes bright, calm songs": 0.8206,
+          "likes lyrics about memories and rain": 0.746,
+          "likes joy, can't stand anger": 0.764,
+          "random taste (control)": 0.5842
+        }
+      },
+      "linear + Wide & Deep": {
+        "ndcg": 0.7584,
+        "ndcg_ci95": 0.0498,
+        "precision": 0.5307,
+        "precision_ci95": 0.0704,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.7082,
+          "likes sad songs only when energetic": 0.7083,
+          "likes bright, calm songs": 0.7861,
+          "likes lyrics about memories and rain": 0.8061,
+          "likes joy, can't stand anger": 0.7834,
+          "random taste (control)": 0.5962
+        }
+      }
+    },
+    "25": {
+      "mood only (no personalization)": {
+        "ndcg": 0.619,
+        "ndcg_ci95": 0.0594,
+        "precision": 0.3413,
+        "precision_ci95": 0.0652,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.4668,
+          "likes sad songs only when energetic": 0.7517,
+          "likes bright, calm songs": 0.6892,
+          "likes lyrics about memories and rain": 0.5789,
+          "likes joy, can't stand anger": 0.6082,
+          "random taste (control)": 0.6344
+        }
+      },
+      "linear taste model": {
+        "ndcg": 0.8403,
+        "ndcg_ci95": 0.0349,
+        "precision": 0.6613,
+        "precision_ci95": 0.0562,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.8478,
+          "likes sad songs only when energetic": 0.7246,
+          "likes bright, calm songs": 0.9642,
+          "likes lyrics about memories and rain": 0.827,
+          "likes joy, can't stand anger": 0.8376,
+          "random taste (control)": 0.5554
+        }
+      },
+      "linear, no interaction terms": {
+        "ndcg": 0.8376,
+        "ndcg_ci95": 0.0378,
+        "precision": 0.664,
+        "precision_ci95": 0.0572,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.8889,
+          "likes sad songs only when energetic": 0.6839,
+          "likes bright, calm songs": 0.9381,
+          "likes lyrics about memories and rain": 0.8342,
+          "likes joy, can't stand anger": 0.8428,
+          "random taste (control)": 0.5699
+        }
+      },
+      "linear + Wide & Deep": {
+        "ndcg": 0.8624,
+        "ndcg_ci95": 0.0332,
+        "precision": 0.7227,
+        "precision_ci95": 0.0571,
+        "per_listener_ndcg": {
+          "likes sad songs": 0.8872,
+          "likes sad songs only when energetic": 0.7329,
+          "likes bright, calm songs": 0.9277,
+          "likes lyrics about memories and rain": 0.8826,
+          "likes joy, can't stand anger": 0.8813,
+          "random taste (control)": 0.5296
+        }
+      }
+    }
+  },
+  "headline": {
+    "budget": 25,
+    "baseline_ndcg": 0.619,
+    "listeners": 5,
+    "systems": {
+      "linear taste model": {
+        "ndcg": 0.8403,
+        "relative_lift_pct": 35.8
+      },
+      "linear + Wide & Deep": {
+        "ndcg": 0.8624,
+        "relative_lift_pct": 39.3
+      }
+    }
+  }
+}

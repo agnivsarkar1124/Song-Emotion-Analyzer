@@ -45,6 +45,17 @@ _keras = None            # module once loaded, False if unavailable
 _cache: "OrderedDict[str, WideDeepModel]" = OrderedDict()
 
 
+def _preload_torch_stack() -> None:
+    import semantic   # light module; tells us whether semantic search is installed and enabled
+    for module in (("sentence_transformers",) if semantic.installed() else ()) + ("torch",):
+        if importlib.util.find_spec(module) is not None:
+            try:
+                __import__(module)
+            except Exception:
+                pass
+            return
+
+
 def _load_keras():
     """Import Keras with a trainable backend, once. Returns the module or None."""
     global _keras
@@ -57,6 +68,12 @@ def _load_keras():
             _keras = False
             return None
         try:
+            # TensorFlow and the PyTorch / Hugging Face stack both bundle native libraries.
+            # Importing TensorFlow first and sentence-transformers second segfaults the whole
+            # process on some platforms (reproduced on Linux with TF 2.21 + torch 2.14 +
+            # transformers 5); the opposite order is fine. So when semantic search is
+            # installed, import its stack before Keras pulls in TensorFlow.
+            _preload_torch_stack()
             if "KERAS_BACKEND" not in os.environ:
                 for backend in _TRAINABLE_BACKENDS:
                     if importlib.util.find_spec(backend) is not None:

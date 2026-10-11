@@ -11,19 +11,22 @@ Every song and every query is mapped into the same interpretable *mood space*:
     valence    standardised VADER mean   (dark  <-> bright)
     intensity  standardised VADER variance (steady <-> volatile)
     emotions   8-way NRC emotion profile (anger ... trust), sums to 1
-    themes     TF-IDF vector over the lyrics (query side: expanded keywords)
+    themes     what the lyrics are about: transformer sentence embeddings when
+               available (semantic.py), plus TF-IDF over expanded keywords
 
 Distance to a song is ``1 - S`` where S is a weighted blend of three similarities,
 each in [0, 1]:
 
     S_emotion  cosine(query emotion profile, song emotion profile)
     S_mood     exp(-d^2 / 2*sigma^2),  d = Euclidean distance in (valence, intensity)
-    S_theme    tanh(cosine(query keywords, song TF-IDF) / 0.12)
+    S_theme    0.75 * semantic + 0.25 * keyword   (semantic search on)
+               tanh(cosine(query keywords, song TF-IDF) / 0.12)   (keywords only)
 
-This is deliberately *not* a neural embedding: sentence-transformers has no
-PyTorch wheel on every platform (see the README), and an interpretable space lets
-us explain *why* a track matched. A mood lexicon ("rainy" -> sadness, calm,
-keywords rain/storm/grey ...) plays the role of query expansion.
+The emotion and mood axes stay interpretable on purpose, so the app can explain
+*why* a track matched; the semantic channel adds meaning-level lyric matching and
+reports the lyric line that matched best. A mood lexicon ("rainy" -> sadness,
+calm, keywords rain/storm/grey ...) plays the role of query expansion for the
+keyword channel. Without sentence-transformers the app runs on keywords alone.
 
 Nothing here imports Streamlit, so it is unit-testable on its own.
 """
@@ -31,7 +34,6 @@ Nothing here imports Streamlit, so it is unit-testable on its own.
 from __future__ import annotations
 
 import json
-import math
 import re
 import statistics
 from dataclasses import dataclass
@@ -40,11 +42,17 @@ from datetime import datetime, timezone
 import numpy as np
 from sklearn.feature_extraction.text import TfidfVectorizer
 
+import semantic
 from emotion_engine import EMOTIONS, analyze_lyrics, load_lexicon
 from themes import theme_scores
 
 SCHEMA_VERSION = 1
 DEFAULT_WEIGHTS = {"emotion": 0.35, "mood": 0.40, "theme": 0.25}
+# With a sentence-embedding model the lyric channel understands meaning, not just
+# keywords, so it earns more weight; it is then 75% semantic + 25% keyword overlap.
+SEMANTIC_WEIGHTS = {"emotion": 0.30, "mood": 0.35, "theme": 0.35}
+SEMANTIC_SHARE = 0.75
+MATCHED_LINE_MIN = 0.15     # only show a "closest lyric" when the semantic score is at least this
 MOOD_SIGMA = 1.0           # width of the (valence, intensity) kernel, in standardised units
 THEME_SATURATION = 0.12    # cosine at which the theme similarity reaches tanh(1) ~ 0.76
 MAX_QUERY_CHARS = 2000
@@ -342,6 +350,8 @@ class ScoredQuery:
     s_theme: np.ndarray
     used_kw: dict             # query keywords found in the lyric vocabulary -> column
     order: list               # song indices, most similar first
+    s_semantic: np.ndarray | None = None   # transformer similarity per song (None = keyword mode)
+    best_chunks: list | None = None        # best-matching lyric chunk per song
 
 
 def _describe_axes(valence: float, intensity: float) -> str:
@@ -391,6 +401,15 @@ class MoodIndex:
             except ValueError:   # empty vocabulary (e.g. all lyrics are stop words)
                 self.vectorizer = self.matrix = None
 
+        # Optional transformer embeddings (semantic.py); keyword matching is the fallback.
+        self.semantic = None
+        self.semantic_error = None
+        if docs and semantic.available():
+            try:
+                self.semantic = semantic.LyricEmbeddings(docs)
+            except Exception as e:
+                self.semantic_error = str(e)
+
     def __len__(self):
         return len(self.songs)
 
@@ -418,7 +437,7 @@ class MoodIndex:
         if n == 0:
             raise ValueError("The song database is empty - add songs or enable the seed songs first.")
 
-        base = dict(DEFAULT_WEIGHTS)
+        base = dict(SEMANTIC_WEIGHTS if self.semantic is not None else DEFAULT_WEIGHTS)
         if weights:
             base.update(weights)
 
@@ -432,14 +451,25 @@ class MoodIndex:
         q_vec, used_kw = self._query_vector(query)
         if q_vec is not None:
             raw = np.asarray(self.matrix @ q_vec).ravel()
-            s_theme = np.tanh(raw / THEME_SATURATION)
+            s_keyword = np.tanh(raw / THEME_SATURATION)
         else:
-            s_theme = np.zeros(n)
+            s_keyword = np.zeros(n)
+
+        s_semantic, best_chunks = None, None
+        if self.semantic is not None:
+            try:
+                s_semantic, best_chunks = self.semantic.score(query.text)
+            except Exception as e:      # e.g. the model failed mid-session: degrade to keywords
+                self.semantic_error, self.semantic = str(e), None
+        if s_semantic is not None:
+            s_theme = SEMANTIC_SHARE * s_semantic + (1 - SEMANTIC_SHARE) * s_keyword
+        else:
+            s_theme = s_keyword
 
         active = {
             "emotion": base["emotion"] if q_emo.any() else 0.0,
             "mood": base["mood"] if query.has_affect else 0.0,
-            "theme": base["theme"] if q_vec is not None else 0.0,
+            "theme": base["theme"] if (q_vec is not None or s_semantic is not None) else 0.0,
         }
         total = sum(active.values())
         if total <= 0:
@@ -450,7 +480,8 @@ class MoodIndex:
         similarity = (active["emotion"] * s_emotion + active["mood"] * s_mood + active["theme"] * s_theme)
         order = sorted(range(n), key=lambda j: (-similarity[j], self.songs[j]["src"]["title"].lower()))
         return ScoredQuery(query=query, weights=active, similarity=similarity, s_emotion=s_emotion,
-                           s_mood=s_mood, s_theme=s_theme, used_kw=used_kw, order=order)
+                           s_mood=s_mood, s_theme=s_theme, used_kw=used_kw, order=order,
+                           s_semantic=s_semantic, best_chunks=best_chunks)
 
     def track(self, sq: "ScoredQuery", j: int, rank: int) -> dict:
         """JSON-ready description of song ``j`` for a scored query (no lyrics)."""
@@ -459,6 +490,10 @@ class MoodIndex:
         reason = self._explain(sq.query, song, j, sq.used_kw, sq.s_emotion[j])
         top_emotion = song["analysis"].get("top_emotion") or src.get("top_emotion")
         similarity = float(sq.similarity[j])
+        sem = None if sq.s_semantic is None else float(sq.s_semantic[j])
+        matched_line = None
+        if sem is not None and sem >= MATCHED_LINE_MIN and sq.best_chunks and sq.best_chunks[j]:
+            matched_line = sq.best_chunks[j][:140]
         return {
             "rank": rank,
             "key": song["key"],
@@ -470,7 +505,9 @@ class MoodIndex:
                 "emotion": round(float(sq.s_emotion[j]), 4),
                 "mood": round(float(sq.s_mood[j]), 4),
                 "theme": round(float(sq.s_theme[j]), 4),
+                "semantic": None if sem is None else round(sem, 4),
             },
+            "matched_line": matched_line,
             "category": src.get("category"),
             "top_emotion": top_emotion if top_emotion not in (None, "-") else None,
             "secondary_emotion": song["analysis"].get("secondary_emotion"),
@@ -509,7 +546,11 @@ class MoodIndex:
             "k": len(tracks),
             "database_size": len(self.songs),
             "weights": {name: round(w, 4) for name, w in sq.weights.items()},
-            "distance": "1 - (w_emotion*cos(emotions) + w_mood*exp(-d^2/2s^2) + w_theme*tanh(cos(tfidf)/0.12))",
+            "distance": ("1 - (w_emotion*cos(emotions) + w_mood*exp(-d^2/2s^2) + w_theme*theme), theme = "
+                         + (f"{SEMANTIC_SHARE}*semantic + {1 - SEMANTIC_SHARE:.2f}*tanh(cos(tfidf)/0.12)"
+                            if sq.s_semantic is not None else "tanh(cos(tfidf)/0.12)")),
+            "search_engine": {"semantic": sq.s_semantic is not None, "model": semantic.model_name()
+                              if sq.s_semantic is not None else None},
             "parsed_mood": {
                 "valence": query.valence,
                 "intensity": query.intensity,

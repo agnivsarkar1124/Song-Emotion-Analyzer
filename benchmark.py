@@ -42,6 +42,7 @@ import numpy as np
 
 import neural_ranker
 import preferences
+import semantic
 from emotion_engine import EMOTIONS
 from mood_search import MoodIndex, song_key
 from pipeline import CALIBRATION, get_lyrics, make_song_record
@@ -269,9 +270,13 @@ def main(argv=None):
     parser.add_argument("--k", type=int, default=5, help="cutoff for NDCG@K / precision@K")
     parser.add_argument("--neural", choices=["auto", "on", "off"], default="auto",
                         help="include the Keras Wide & Deep blend (auto = if installed)")
+    parser.add_argument("--semantic", choices=["auto", "off"], default="auto",
+                        help="use transformer semantic search in the base ranking (auto = if installed)")
     parser.add_argument("--out", default=os.path.join(HERE, "benchmark_results.json"))
     args = parser.parse_args(argv)
 
+    if args.semantic == "off":
+        semantic.set_encoder(False)
     use_neural = args.neural == "on" or (args.neural == "auto" and neural_ranker.available())
     if args.neural == "on" and not neural_ranker.available():
         sys.exit("--neural on, but Keras with a TensorFlow/JAX backend isn't installed.")
@@ -285,7 +290,8 @@ def main(argv=None):
     z = feature_table(index)
     scored = {q: index.score_all(q) for q in QUERIES}
     print(f"{len(songs)} songs, {len(LISTENERS)} listeners, {len(QUERIES)} queries, {args.seeds} seeds, "
-          f"budgets {budgets}, neural={'on' if use_neural else 'off'}"
+          f"budgets {budgets}, lyric search={'semantic' if index.semantic is not None else 'keywords'}, "
+          f"neural={'on' if use_neural else 'off'}"
           + (f" ({neural_ranker.backend_info()['label']})" if use_neural else ""))
 
     rows, started = [], time.time()
@@ -302,6 +308,7 @@ def main(argv=None):
 
     table = summarise(rows)
     report = {"songs": len(songs), "synthetic": args.synthetic, "k": args.k, "seeds": args.seeds,
+              "lyric_search": "semantic" if index.semantic is not None else "keywords",
               "queries": QUERIES, "listeners": list(LISTENERS), "neural": use_neural, "results": {}}
     real = [l for l in LISTENERS if not l.startswith("random")]
 

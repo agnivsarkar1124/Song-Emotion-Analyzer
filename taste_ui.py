@@ -48,7 +48,7 @@ _TRACK_FIELDS = (
     "key", "title", "artist", "rank", "base_rank", "personal_rank", "rank_change", "base_percent",
     "personal_percent", "preference", "taste_parts", "reasons", "state", "top_emotion",
     "secondary_emotion", "emotion_profile", "valence", "intensity", "why", "matched_keywords",
-    "preview_url", "track_url", "duration_seconds", "category", "scores",
+    "preview_url", "track_url", "duration_seconds", "category", "scores", "matched_line",
 )
 
 
@@ -98,6 +98,7 @@ def build_view(result: dict, playlist: dict, history: list, last_change: list, s
         "saved": saved,
         "toast": toast,
         "playlist": playlist,
+        "search": playlist.get("search_engine") or {"semantic": False, "model": None},
     }
 
 
@@ -197,6 +198,7 @@ CSS = r"""
 .detail { grid-column:1 / -1; display:none; margin-top:8px; padding-top:12px; border-top:1px dashed var(--line); }
 .card.open .detail { display:block; }
 .why { margin:0 0 10px; font-size:14px; line-height:1.45; }
+.quote { margin:-4px 0 12px; padding:8px 12px; border-left:3px solid #f15bb5; background:rgba(241,91,181,.08); border-radius:0 10px 10px 0; font-size:13.5px; font-style:italic; color:#f1e9ff; overflow-wrap:anywhere; }
 .bars { display:grid; gap:8px; margin:8px 0 12px; }
 .brow { display:grid; grid-template-columns:150px 1fr 54px; gap:10px; align-items:center; font-size:12.5px; color:var(--muted); }
 .track { height:8px; border-radius:8px; background:rgba(255,255,255,.12); overflow:hidden; position:relative; }
@@ -431,6 +433,10 @@ function header(data) {
     h("div", { class: "ttl" }, h("h2", {}, "Your mood mix"), h("p", { class: "q" }, "“" + data.query + "”")),
     h("div", { class: "badges" },
       h("span", { class: "badge" }, h("b", {}, data.database_size), " songs searched"),
+      h("span", { class: "badge", title: data.search && data.search.semantic
+          ? `Lyrics matched by meaning with ${data.search.model}, plus keywords`
+          : "Lyrics matched by keywords. Install sentence-transformers for semantic search." },
+        data.search && data.search.semantic ? "🔎 Semantic search" : "🔤 Keyword search"),
       h("span", { class: "badge", title: eng.label || "" }, engineText),
       h("div", { class: "meter", title: "How much your ratings shape the ranking. It grows as you rate more songs (max 45%)." },
         h("div", { class: "ring", style: `--p:${Math.round(100 * strength)}` }, h("span", {}, Math.round(100 * data.alpha) + "%")),
@@ -480,6 +486,8 @@ function trackCard(t, data, send, opts) {
   if (emo) chips.append(h("span", { class: "chip emo", style: `background:${grad(emo)}` }, cap(emo)));
   (t.top_themes || []).forEach(th => chips.append(h("span", { class: "chip" }, th)));
   (t.reasons || []).slice(0, 2).forEach(r => chips.append(h("span", { class: "chip " + (r.value >= 0 ? "pos" : "neg"), title: "How your taste profile moved this song" }, (r.value >= 0 ? "+ " : "− ") + r.text)));
+  const sem = t.scores && t.scores.semantic;
+  if (sem != null && sem >= 0.35) chips.append(h("span", { class: "chip pos", title: "How closely the lyrics' meaning matches your description" }, `≈ meaning ${Math.round(100 * sem)}%`));
   const dur = fmtDur(t.duration_seconds); if (dur) chips.append(h("span", { class: "chip" }, dur));
   const toggle = () => { S.open = S.open === t.key ? null : t.key; card.classList.toggle("open", S.open === t.key); };
   const pctShown = opts && opts.base ? t.base_percent : t.personal_percent;
@@ -497,10 +505,12 @@ function trackCard(t, data, send, opts) {
 function detail(t) {
   const d = h("div", { class: "detail" });
   d.append(h("p", { class: "why" }, t.why || ""));
+  if (t.matched_line) d.append(h("p", { class: "quote", title: "The lyric lines closest in meaning to your description" }, "🔎 \u201C" + t.matched_line + "\u201D"));
   const parts = t.taste_parts || {};
   d.append(h("div", { class: "bars" },
     h("div", { class: "brow" }, h("span", {}, "Mood match"), h("div", { class: "track" }, h("div", { class: "fill", style: `width:${t.base_percent}%;background:linear-gradient(90deg,#4f7cff,#2ec4b6)` })), h("span", {}, t.base_percent + "%")),
     h("div", { class: "brow" }, h("span", {}, "Your taste"), tasteBar(t.preference), h("span", {}, signed(t.preference || 0))),
+    (t.scores && t.scores.semantic != null) ? h("div", { class: "brow" }, h("span", {}, "Lyric meaning"), h("div", { class: "track" }, h("div", { class: "fill", style: `width:${Math.round(100 * t.scores.semantic)}%;background:linear-gradient(90deg,#f15bb5,#ffd166)` })), h("span", {}, Math.round(100 * t.scores.semantic) + "%")) : null,
     parts.neural != null ? h("div", { class: "brow" }, h("span", {}, " ↳ linear / neural"), h("div", { class: "track", style: "background:none" }), h("span", {}, `${signed(parts.linear, 1)} / ${signed(parts.neural, 1)}`)) : null));
   const prof = t.emotion_profile || {};
   const stack = h("div", { class: "stack" });
